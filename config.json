@@ -1,0 +1,7 @@
+{
+  "telegram": {
+    "enabled": true,
+    "bot_token": "isibotoken",
+    "chat_id": "isichatid"
+  }
+}
