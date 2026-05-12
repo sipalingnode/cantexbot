@@ -18,7 +18,7 @@
 
 - Multi Account
 - Telegram Control & Monitoring
-- Auto Swap CC ↔ USDCX
+- Auto Swap CC ↔ USDCX | USDCX ↔ CBTC
 - Snapshot Target
 - Gas Fee Tracking
 - Weekly Gas Fee Report
