@@ -41,9 +41,16 @@ USDCX = InstrumentId(
     admin="decentralized-usdc-interchain-rep::12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef"
 )
 
+CBTC = InstrumentId(
+    id="CBTC",
+    admin="cbtc-network::12205af3b949a04776fc48cdcc05a060f6bda2e470632935f375d1049a8546a3b262"
+)
+
 bot_task = None
 is_running = False
 auto_swap_enabled = False
+swap_mode = None
+pending_swap_mode = False
 gasfee_data = {}
 balance_data = {}
 pending_add_account = None
@@ -181,8 +188,14 @@ class CantexBot:
         operator = OperatorKeySigner.from_hex(self.operator_key)
         intent = IntentTradingKeySigner.from_hex(self.trading_key)
 
-        self.sdk = CantexSDK(operator, intent, base_url="https://api.cantex.io")
+        self.sdk = CantexSDK(
+            operator,
+            intent,
+            base_url="https://api.cantex.io"
+        )
+
         await self.sdk.authenticate()
+
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -191,10 +204,13 @@ class CantexBot:
 
     async def get_balance(self):
         info = await self.sdk.get_account_info()
+
         balances = {}
 
         for token in info.tokens:
+
             unlocked = getattr(token, "unlocked_amount", None)
+
             if unlocked is None:
                 unlocked = getattr(token, "amount", 0)
 
@@ -217,6 +233,22 @@ class CantexBot:
             amount,
             USDCX,
             CC,
+            max_network_fee=max_network_fee
+        )
+
+    async def swap_usdcx_to_cbtc(self, amount, max_network_fee=None):
+        return await self.sdk.swap(
+            amount,
+            USDCX,
+            CBTC,
+            max_network_fee=max_network_fee
+        )
+
+    async def swap_cbtc_to_usdcx(self, amount, max_network_fee=None):
+        return await self.sdk.swap(
+            amount,
+            CBTC,
+            USDCX,
             max_network_fee=max_network_fee
         )
 
@@ -346,11 +378,13 @@ async def get_initial_balance(account):
         balances = await bot.get_balance()
         cc = balances.get("CC", {})
         usdcx = balances.get("USDCx", {})
+        cbtc = balances.get("CBTC", {})
 
         return {
             "name": name,
             "cc": fmt(cc.get("unlocked", 0)),
-            "usdcx": fmt(usdcx.get("unlocked", 0))
+            "usdcx": fmt(usdcx.get("unlocked", 0)),
+            "cbtc": fmt(cbtc.get("unlocked", 0))
         }
 
 async def run_bot(account, config):
@@ -413,34 +447,76 @@ async def run_bot(account, config):
                     str(balances.get("USDCx", {}).get("unlocked", 0))
                 )
 
-                if cc_unlocked <= Decimal("12"):
+                cbtc_unlocked = Decimal(
+                    str(balances.get("CBTC", {}).get("unlocked", 0))
+                )
 
-                    if usdcx_unlocked > 0:
-                        direction = "usdcx_to_cc"
+                if swap_mode == "cc_usdcx":
+
+                    if cc_unlocked <= Decimal("12"):
+
+                        if usdcx_unlocked > 0:
+                            direction = "usdcx_to_cc"
+
+                        else:
+                            stop_msg = await log(
+                                "CC <= 12 & USDCx kosong, stop account",
+                                name,
+                                workdir
+                            )
+
+                            await send_telegram(stop_msg, config)
+
+                            break
+
+                    elif usdcx_unlocked == Decimal("0"):
+
+                        direction = "cc_to_usdcx"
 
                     else:
-                        stop_msg = await log(
-                            "CC <= 12 & USDCx kosong, stop account",
-                            name,
-                            workdir
+
+                        direction = (
+                            "cc_to_usdcx"
+                            if i % 2 == 0
+                            else "usdcx_to_cc"
                         )
 
-                        await send_telegram(stop_msg, config)
+                elif swap_mode == "usdcx_cbtc":
 
-                        break
+                    if usdcx_unlocked <= Decimal("0"):
 
-                elif usdcx_unlocked == Decimal("0"):
+                        if cbtc_unlocked > 0:
+                            direction = "cbtc_to_usdcx"
 
-                    direction = "cc_to_usdcx"
+                        else:
+
+                            stop_msg = await log(
+                                "USDCX & CBTC kosong",
+                                name,
+                                workdir
+                            )
+
+                            await send_telegram(stop_msg, config)
+
+                            break
+
+                    elif cbtc_unlocked <= Decimal("0"):
+
+                        direction = "usdcx_to_cbtc"
+
+                    else:
+
+                        direction = (
+                            "usdcx_to_cbtc"
+                            if i % 2 == 0
+                            else "cbtc_to_usdcx"
+                        )
 
                 else:
 
-                    direction = (
-                        "cc_to_usdcx"
-                        if i % 2 == 0
-                        else "usdcx_to_cc"
-                    )
-
+                    await log("Swap mode tidak valid", name, workdir)
+                    
+                    break
 
                 if direction == "cc_to_usdcx":
 
@@ -461,7 +537,7 @@ async def run_bot(account, config):
                         amount = amount.quantize(Decimal("1"))
 
                         msg1 = await log(
-                            f"Swap {fmt(amount)} CC -> USDCX",
+                            f"Swap {fmt(amount)} CC => USDCX",
                             name,
                             workdir
                         )
@@ -489,7 +565,10 @@ async def run_bot(account, config):
 
                         else:
 
-                            result = await bot.swap_cc_to_usdcx(amount, max_network_fee=max_gas_fee)
+                            result = await bot.swap_cc_to_usdcx(
+                                amount,
+                                max_network_fee=max_gas_fee
+                            )
 
                         if (
                             isinstance(result, dict)
@@ -500,7 +579,7 @@ async def run_bot(account, config):
 
                             tg_buffer.extend([msg1, msg2])
 
-                else:
+                elif direction == "usdcx_to_cc":
 
                     if usdcx_unlocked <= 0:
 
@@ -515,7 +594,7 @@ async def run_bot(account, config):
                     else:
 
                         msg1 = await log(
-                            f"Swap {fmt(usdcx_unlocked)} USDCX -> CC",
+                            f"Swap {fmt(usdcx_unlocked)} USDCX => CC",
                             name,
                             workdir
                         )
@@ -543,7 +622,124 @@ async def run_bot(account, config):
 
                         else:
 
-                            result = await bot.swap_usdcx_to_cc(usdcx_unlocked, max_network_fee=max_gas_fee)
+                            result = await bot.swap_usdcx_to_cc(
+                                usdcx_unlocked,
+                                max_network_fee=max_gas_fee
+                            )
+
+                        if (
+                            isinstance(result, dict)
+                            and result.get("verify")
+                        ):
+
+                            add_gas_fee(name, gas_fee)
+
+                            tg_buffer.extend([msg1, msg2])
+
+                elif direction == "usdcx_to_cbtc":
+
+                    if usdcx_unlocked <= 0:
+
+                        await log(
+                            "USDCx kosong, skip",
+                            name,
+                            workdir
+                        )
+
+                        result = "skipped"
+
+                    else:
+
+                        msg1 = await log(
+                            f"Swap {fmt(usdcx_unlocked)} USDCX => CBTC",
+                            name,
+                            workdir
+                        )
+
+                        gas_fee = await get_gas_fee(
+                            bot,
+                            usdcx_unlocked,
+                            USDCX,
+                            CBTC
+                        )
+
+                        msg2 = await log(
+                            f"Gas: {fmt(gas_fee)} CC",
+                            name,
+                            workdir
+                        )
+
+                        if gas_fee < min_gas_fee:
+
+                            result = "skipped_low_gas"
+
+                        elif gas_fee > max_gas_fee:
+
+                            result = "skipped_high_gas"
+
+                        else:
+
+                            result = await bot.swap_usdcx_to_cbtc(
+                                usdcx_unlocked,
+                                max_network_fee=max_gas_fee
+                            )
+
+                        if (
+                            isinstance(result, dict)
+                            and result.get("verify")
+                        ):
+
+                            add_gas_fee(name, gas_fee)
+
+                            tg_buffer.extend([msg1, msg2])
+
+                elif direction == "cbtc_to_usdcx":
+
+                    if cbtc_unlocked <= 0:
+
+                        await log(
+                            "CBTC kosong, skip",
+                            name,
+                            workdir
+                        )
+
+                        result = "skipped"
+
+                    else:
+
+                        msg1 = await log(
+                            f"Swap {cbtc_unlocked:.8f} CBTC => USDCX",
+                            name,
+                            workdir
+                        )
+
+                        gas_fee = await get_gas_fee(
+                            bot,
+                            cbtc_unlocked,
+                            CBTC,
+                            USDCX
+                        )
+
+                        msg2 = await log(
+                            f"Gas: {fmt(gas_fee)} CC",
+                            name,
+                            workdir
+                        )
+
+                        if gas_fee < min_gas_fee:
+
+                            result = "skipped_low_gas"
+
+                        elif gas_fee > max_gas_fee:
+
+                            result = "skipped_high_gas"
+
+                        else:
+
+                            result = await bot.swap_cbtc_to_usdcx(
+                                cbtc_unlocked,
+                                max_network_fee=max_gas_fee
+                            )
 
                         if (
                             isinstance(result, dict)
@@ -600,6 +796,9 @@ async def run_bot(account, config):
                     ),
                     "usdcx": fmt(
                         balances.get("USDCx", {}).get("unlocked", 0)
+                    ),
+                    "cbtc": fmt(
+                        balances.get("CBTC", {}).get("unlocked", 0)
                     )
                 }
 
@@ -669,12 +868,13 @@ async def main():
 
             balance_data[r["name"]] = {
                 "cc": r["cc"],
-                "usdcx": r["usdcx"]
+                "usdcx": r["usdcx"],
+                "cbtc": r["cbtc"]
             }
 
             line = (
                 f"[{r['name']}] "
-                f"Initial Balance: {r['cc']} CC | {r['usdcx']} USDCx"
+                f"Initial Balance: {r['cc']} CC | {r['usdcx']} USDCx | {r['cbtc']} CBTC"
             )
 
             print(line)
@@ -779,7 +979,48 @@ async def startbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(menu, parse_mode="HTML")
 
 async def autoswap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global bot_task, is_running, auto_swap_enabled
+
+    global pending_swap_mode
+
+    pending_swap_mode = True
+
+    text = (
+        "Pilih mode\n\n"
+        "1. CC <=> USDCX\n"
+        "2. USDCX <=> CBTC"
+    )
+
+    await update.message.reply_text(text)
+
+async def handle_swap_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    global pending_swap_mode
+    global swap_mode
+    global bot_task
+    global is_running
+    global auto_swap_enabled
+
+    if not pending_swap_mode:
+        return
+
+    text = update.message.text.strip()
+
+    modes = {
+        "1": "cc_usdcx",
+        "2": "usdcx_cbtc"
+    }
+
+    if text not in modes:
+
+        await update.message.reply_text(
+            "Pilihan tidak valid"
+        )
+
+        return
+
+    pending_swap_mode = False
+
+    swap_mode = modes[text]
 
     if is_running and bot_task and not bot_task.done():
         await update.message.reply_text("Bot sudah berjalan")
@@ -844,9 +1085,10 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             balance_data[r["name"]] = {
                 "cc": r["cc"],
-                "usdcx": r["usdcx"]
+                "usdcx": r["usdcx"],
+                "cbtc": r["cbtc"]
             }
-            lines.append(f"[{r['name']}] {r['cc']} CC | {r['usdcx']} USDCx")
+            lines.append(f"[{r['name']}] {r['cc']} CC | {r['usdcx']} USDCx | {r['cbtc']} CBTC")
 
         await msg.edit_text("\n".join(lines))
     except Exception as e:
@@ -1185,6 +1427,7 @@ async def run_telegram():
     app.add_handler(CommandHandler("resetgasfee", resetgasfee))
     app.add_handler(CommandHandler("autoswap", autoswap))
     app.add_handler(CommandHandler("addaccount", addaccount))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_swap_mode))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_account))
     
     await app.initialize()
