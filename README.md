@@ -26,7 +26,8 @@
 ### Install dependency
 
 ```
-sudo apt install python3 python3-pip git -y
+sudo apt update
+sudo apt install python3.11 python3.11-venv -y
 ```
 
 ---
@@ -43,7 +44,7 @@ cd cantexbot
 ### Buat virtual environment
 
 ```
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
 ```
 
