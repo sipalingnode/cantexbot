@@ -121,18 +121,29 @@ async def wait_until_next_utc_3():
     await asyncio.sleep(wait_seconds)
 
 async def send_telegram(message, config):
-    tg = config["telegram"]
-    if not tg["enabled"]:
+
+    tg = config.get("telegram", {})
+
+    if not tg.get("enabled"):
         return
 
-    url = f"https://api.telegram.org/bot{tg['bot_token']}/sendMessage"
+    bot_token = tg.get("bot_token")
+    chat_id = tg.get("chat_id")
+
+    if not bot_token or not chat_id:
+        return
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
     try:
         async with aiohttp.ClientSession() as session:
-            await session.post(url, json={
-                "chat_id": tg["chat_id"],
-                "text": message
-            })
+            await session.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": message
+                }
+            )
     except:
         pass
 
@@ -151,8 +162,15 @@ async def log(msg, account="", workdir=None):
     return f"{prefix}{msg}"
 
 def load_accounts(path):
-    with open(path, "r") as f:
-        data = json.load(f)
+
+    if not os.path.exists(path):
+        return []
+
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except:
+        return []
 
     return [
         {
@@ -169,11 +187,26 @@ def save_accounts(path, data):
         json.dump(data, f, indent=2)
 
 def load_config(path):
-    with open(path, "r") as f:
-        return json.load(f)
+
+    if not os.path.exists(path):
+        return {}
+
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
 class CantexBot:
-    def __init__(self, operator_key, trading_key, account_name="", workdir=None):
+
+    def __init__(
+        self,
+        operator_key,
+        trading_key,
+        account_name="",
+        workdir=None
+    ):
+
         self.operator_key = operator_key
         self.trading_key = trading_key
         self.account_name = account_name
@@ -181,12 +214,23 @@ class CantexBot:
         self.sdk = None
 
     async def __aenter__(self):
+
         if self.workdir:
-            os.makedirs(self.workdir, exist_ok=True)
+
+            os.makedirs(
+                self.workdir,
+                exist_ok=True
+            )
+
             os.chdir(self.workdir)
 
-        operator = OperatorKeySigner.from_hex(self.operator_key)
-        intent = IntentTradingKeySigner.from_hex(self.trading_key)
+        operator = OperatorKeySigner.from_hex(
+            self.operator_key
+        )
+
+        intent = IntentTradingKeySigner.from_hex(
+            self.trading_key
+        )
 
         self.sdk = CantexSDK(
             operator,
@@ -198,21 +242,37 @@ class CantexBot:
 
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type,
+        exc_val,
+        exc_tb
+    ):
+
         if self.sdk:
             await self.sdk.close()
 
     async def get_balance(self):
+
         info = await self.sdk.get_account_info()
 
         balances = {}
 
         for token in info.tokens:
 
-            unlocked = getattr(token, "unlocked_amount", None)
+            unlocked = getattr(
+                token,
+                "unlocked_amount",
+                None
+            )
 
             if unlocked is None:
-                unlocked = getattr(token, "amount", 0)
+
+                unlocked = getattr(
+                    token,
+                    "amount",
+                    0
+                )
 
             balances[token.instrument_symbol] = {
                 "unlocked": unlocked
@@ -220,7 +280,12 @@ class CantexBot:
 
         return balances
 
-    async def swap_cc_to_usdcx(self, amount, max_network_fee=None):
+    async def swap_cc_to_usdcx(
+        self,
+        amount,
+        max_network_fee=None
+    ):
+
         return await self.sdk.swap(
             amount,
             CC,
@@ -228,7 +293,12 @@ class CantexBot:
             max_network_fee=max_network_fee
         )
 
-    async def swap_usdcx_to_cc(self, amount, max_network_fee=None):
+    async def swap_usdcx_to_cc(
+        self,
+        amount,
+        max_network_fee=None
+    ):
+
         return await self.sdk.swap(
             amount,
             USDCX,
@@ -236,7 +306,12 @@ class CantexBot:
             max_network_fee=max_network_fee
         )
 
-    async def swap_usdcx_to_cbtc(self, amount, max_network_fee=None):
+    async def swap_usdcx_to_cbtc(
+        self,
+        amount,
+        max_network_fee=None
+    ):
+
         return await self.sdk.swap(
             amount,
             USDCX,
@@ -244,7 +319,12 @@ class CantexBot:
             max_network_fee=max_network_fee
         )
 
-    async def swap_cbtc_to_usdcx(self, amount, max_network_fee=None):
+    async def swap_cbtc_to_usdcx(
+        self,
+        amount,
+        max_network_fee=None
+    ):
+
         return await self.sdk.swap(
             amount,
             CBTC,
@@ -253,7 +333,14 @@ class CantexBot:
         )
 
 async def addaccount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     global pending_add_account
+
+    if pending_add_account:
+        await update.message.reply_text(
+            "Masih ada proses add account yang belum selesai"
+        )
+        return
 
     pending_add_account = {
         "step": "name"
@@ -264,6 +351,7 @@ async def addaccount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_add_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     global pending_add_account
 
     if not pending_add_account:
@@ -275,23 +363,37 @@ async def handle_add_account(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     try:
 
+        accounts_path = os.path.join(
+            BASE_DIR,
+            "accounts.json"
+        )
+
+        if not os.path.exists(accounts_path):
+            accounts = {}
+
+        else:
+            with open(accounts_path, "r") as f:
+                try:
+                    accounts = json.load(f)
+                except:
+                    accounts = {}
+
         if data["step"] == "name":
 
-            if not text:
+            if len(text) == 0:
+
                 await update.message.reply_text(
                     "Nama account tidak boleh kosong"
                 )
+
                 return
 
-            accounts_path = os.path.join(BASE_DIR, "accounts.json")
-
-            with open(accounts_path, "r") as f:
-                accounts = json.load(f)
-
             if text in accounts:
+
                 await update.message.reply_text(
                     f"Account {text} sudah ada"
                 )
+
                 return
 
             data["name"] = text
@@ -305,10 +407,12 @@ async def handle_add_account(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         if data["step"] == "operator_key":
 
-            if not text:
+            if len(text) == 0:
+
                 await update.message.reply_text(
                     "Operator key tidak boleh kosong"
                 )
+
                 return
 
             data["operator_key"] = text
@@ -322,18 +426,15 @@ async def handle_add_account(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         if data["step"] == "trading_key":
 
-            if not text:
+            if len(text) == 0:
+
                 await update.message.reply_text(
                     "Trading key tidak boleh kosong"
                 )
+
                 return
 
             data["trading_key"] = text
-
-            accounts_path = os.path.join(BASE_DIR, "accounts.json")
-
-            with open(accounts_path, "r") as f:
-                accounts = json.load(f)
 
             accounts[data["name"]] = {
                 "operator_key": data["operator_key"],
@@ -341,7 +442,10 @@ async def handle_add_account(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "workdir": f"/root/cantexbot/{data['name']}"
             }
 
-            save_accounts(accounts_path, accounts)
+            save_accounts(
+                accounts_path,
+                accounts
+            )
 
             pending_add_account = None
 
@@ -354,8 +458,18 @@ async def handle_add_account(update: Update, context: ContextTypes.DEFAULT_TYPE)
         pending_add_account = None
 
         await update.message.reply_text(
-            f"Gagal menambahkan account: {e}"
+            f"Gagal menambahkan account:\n{str(e)}"
         )
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if pending_add_account:
+        await handle_add_account(update, context)
+        return
+
+    if pending_swap_mode:
+        await handle_swap_mode(update, context)
+        return
 
 async def get_gas_fee(bot, amount, token_in, token_out):
     quote = await bot.sdk.get_swap_quote(amount, token_in, token_out)
@@ -982,6 +1096,12 @@ async def autoswap(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     global pending_swap_mode
 
+    if pending_swap_mode:
+        await update.message.reply_text(
+            "Masih ada pemilihan mode yang belum selesai"
+        )
+        return
+
     pending_swap_mode = True
 
     text = (
@@ -1012,8 +1132,10 @@ async def handle_swap_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text not in modes:
 
+        pending_swap_mode = False
+
         await update.message.reply_text(
-            "Pilihan tidak valid"
+            "Pilihan tidak valid\nKetik /autoswap lagi"
         )
 
         return
@@ -1023,7 +1145,11 @@ async def handle_swap_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     swap_mode = modes[text]
 
     if is_running and bot_task and not bot_task.done():
-        await update.message.reply_text("Bot sudah berjalan")
+
+        await update.message.reply_text(
+            "Bot sudah berjalan"
+        )
+
         return
 
     auto_swap_enabled = True
@@ -1095,18 +1221,29 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"Error: {e}")
 
 async def address(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    accounts = load_accounts(os.path.join(BASE_DIR, "accounts.json"))
+
+    accounts = load_accounts(
+        os.path.join(BASE_DIR, "accounts.json")
+    )
 
     if not accounts:
-        await update.message.reply_text("Tidak ada akun di accounts.json")
+
+        await update.message.reply_text(
+            "Tidak ada akun di accounts.json"
+        )
+
         return
 
-    msg = await update.message.reply_text("Scanning address account...")
+    msg = await update.message.reply_text(
+        "Scanning address account..."
+    )
 
     lines = ["ADDRESS ACCOUNT"]
 
     for acc in accounts:
+
         try:
+
             async with CantexBot(
                 acc["operator_key"],
                 acc["trading_key"],
@@ -1116,21 +1253,46 @@ async def address(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 info = await bot.sdk.get_account_info()
 
-                address = getattr(info, "account_address", None)
+                address = getattr(
+                    info,
+                    "account_address",
+                    None
+                )
 
                 if not address:
-                    address = getattr(info, "address", "Address tidak ditemukan")
+                    address = getattr(
+                        info,
+                        "address",
+                        "Address tidak ditemukan"
+                    )
+
+                operator_preview = (
+                    acc["operator_key"][:16]
+                    if acc.get("operator_key")
+                    else "-"
+                )
+
+                trading_preview = (
+                    acc["trading_key"][:16]
+                    if acc.get("trading_key")
+                    else "-"
+                )
 
                 lines.append(
-                    f"[{acc['name']}]\n<code>{address}</code>"
+                    f"[{acc['name']}]\n"
+                    f"<code>{address}</code>"
                 )
 
         except Exception as e:
+
             lines.append(
                 f"[{acc['name']}] Error: {e}"
             )
 
-    await msg.edit_text("\n\n".join(lines), parse_mode="HTML")
+    await msg.edit_text(
+        "\n\n".join(lines),
+        parse_mode="HTML"
+    )
 
 async def gasfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
     load_gasfee_data()
@@ -1406,9 +1568,18 @@ Network Fee: {fee_swap} CC
     await update.message.reply_text(msg)
 
 async def run_telegram():
+
     load_gasfee_data()
+
     config = load_config("./config.json")
-    token = config["telegram"]["bot_token"]
+
+    telegram_config = config.get("telegram", {})
+
+    token = telegram_config.get("bot_token")
+
+    if not token:
+        print("[ERROR] bot_token tidak ditemukan di config.json")
+        return
 
     app = ApplicationBuilder().token(token).build()
 
@@ -1427,20 +1598,52 @@ async def run_telegram():
     app.add_handler(CommandHandler("resetgasfee", resetgasfee))
     app.add_handler(CommandHandler("autoswap", autoswap))
     app.add_handler(CommandHandler("addaccount", addaccount))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_swap_mode))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_account))
-    
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
 
-    while True:
-        await asyncio.sleep(1)
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text
+        )
+    )
+
+    try:
+
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+
+        while True:
+            await asyncio.sleep(1)
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
+
+        print("\n[INFO] Stopping bot...")
+
+    finally:
+
+        try:
+            await app.updater.stop()
+        except:
+            pass
+
+        try:
+            await app.stop()
+        except:
+            pass
+
+        try:
+            await app.shutdown()
+        except:
+            pass
+
+        print("[INFO] Bot stopped")
 
 if __name__ == "__main__":
+
     print("[INFO] CANTEXBOT READY ON TELEGRAM")
 
     async def startup():
+
         config = load_config("./config.json")
 
         await send_telegram(
@@ -1450,4 +1653,8 @@ if __name__ == "__main__":
 
         await run_telegram()
 
-    asyncio.run(startup())
+    try:
+        asyncio.run(startup())
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Bot dihentikan manual")
